@@ -781,6 +781,8 @@ struct CustomShader {
 	GLint transform = -1;
 	GLint value = -1;
 	GLint dimensions = -1;
+	GLint audio_level = -1;
+	GLint audio_hit = -1;
 };
 
 struct CustomShaderRegistry {
@@ -1701,7 +1703,15 @@ bool RenderInterface_GL3::RegisterShader(const Rml::String& name, const Rml::Str
 	entry.transform = glGetUniformLocation(program, "_transform");
 	entry.value = glGetUniformLocation(program, "_value");
 	entry.dimensions = glGetUniformLocation(program, "_dimensions");
+	entry.audio_level = glGetUniformLocation(program, "_audio_level");
+	entry.audio_hit = glGetUniformLocation(program, "_audio_hit");
 	return true;
+}
+
+void RenderInterface_GL3::SetShaderAudio(float music_level, float effect_hit)
+{
+	shader_audio_level = music_level;
+	shader_audio_hit = effect_hit;
 }
 
 Rml::CompiledShaderHandle RenderInterface_GL3::CompileShader(const Rml::String& name, const Rml::Dictionary& parameters)
@@ -1855,6 +1865,10 @@ void RenderInterface_GL3::RenderShader(Rml::CompiledShaderHandle shader_handle, 
 			glUniform1f(custom.value, (float)time);
 		if (custom.dimensions >= 0)
 			glUniform2f(custom.dimensions, shader.dimensions.x, shader.dimensions.y);
+		if (custom.audio_level >= 0)
+			glUniform1f(custom.audio_level, shader_audio_level);
+		if (custom.audio_hit >= 0)
+			glUniform1f(custom.audio_hit, shader_audio_hit);
 
 		glBindVertexArray(geometry.vao);
 		glDrawElements(GL_TRIANGLES, geometry.draw_count, GL_UNSIGNED_INT, (const GLvoid*)0);
