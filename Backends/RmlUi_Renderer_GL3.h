@@ -70,10 +70,13 @@ public:
 	// hot reload work. Returns false if compilation or linking fails.
 	bool RegisterShader(const Rml::String& name, const Rml::String& fragment_source);
 
-	// Audio levels handed to every custom shader as _audio_level (a smoothed
-	// music level) and _audio_hit (a sound-effect transient). Both are 0..1
-	// and both are ignored by shaders that do not declare them.
-	void SetShaderAudio(float music_level, float effect_hit);
+	// Audio state handed to every custom shader:
+	//   _audio_level      smoothed music level, 0..1
+	//   _audio_hit        sound-effect transient, 0..1
+	//   _audio_beat       strength of the last music onset, 0..1
+	//   _audio_beat_age   seconds since that onset
+	// Shaders that do not declare a uniform simply ignore it.
+	void SetShaderAudio(float music_level, float effect_hit, float beat_strength, float beat_age);
 
 	Rml::CompiledShaderHandle CompileShader(const Rml::String& name, const Rml::Dictionary& parameters) override;
 	void RenderShader(Rml::CompiledShaderHandle shader_handle, Rml::CompiledGeometryHandle geometry_handle, Rml::Vector2f translation,
@@ -125,6 +128,8 @@ private:
 	Rml::UniquePtr<Gfx::CustomShaderRegistry> custom_shaders;
 	float shader_audio_level = 0.0f;
 	float shader_audio_hit = 0.0f;
+	float shader_beat_strength = 0.0f;
+	float shader_beat_age = 0.0f;
 
 	/*
 	    Manages render targets, including the layer stack and postprocessing framebuffers.

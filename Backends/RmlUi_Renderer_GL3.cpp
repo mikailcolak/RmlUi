@@ -783,6 +783,8 @@ struct CustomShader {
 	GLint dimensions = -1;
 	GLint audio_level = -1;
 	GLint audio_hit = -1;
+	GLint beat = -1;
+	GLint beat_age = -1;
 };
 
 struct CustomShaderRegistry {
@@ -1705,13 +1707,17 @@ bool RenderInterface_GL3::RegisterShader(const Rml::String& name, const Rml::Str
 	entry.dimensions = glGetUniformLocation(program, "_dimensions");
 	entry.audio_level = glGetUniformLocation(program, "_audio_level");
 	entry.audio_hit = glGetUniformLocation(program, "_audio_hit");
+	entry.beat = glGetUniformLocation(program, "_audio_beat");
+	entry.beat_age = glGetUniformLocation(program, "_audio_beat_age");
 	return true;
 }
 
-void RenderInterface_GL3::SetShaderAudio(float music_level, float effect_hit)
+void RenderInterface_GL3::SetShaderAudio(float music_level, float effect_hit, float beat_strength, float beat_age)
 {
 	shader_audio_level = music_level;
 	shader_audio_hit = effect_hit;
+	shader_beat_strength = beat_strength;
+	shader_beat_age = beat_age;
 }
 
 Rml::CompiledShaderHandle RenderInterface_GL3::CompileShader(const Rml::String& name, const Rml::Dictionary& parameters)
@@ -1869,6 +1875,10 @@ void RenderInterface_GL3::RenderShader(Rml::CompiledShaderHandle shader_handle, 
 			glUniform1f(custom.audio_level, shader_audio_level);
 		if (custom.audio_hit >= 0)
 			glUniform1f(custom.audio_hit, shader_audio_hit);
+		if (custom.beat >= 0)
+			glUniform1f(custom.beat, shader_beat_strength);
+		if (custom.beat_age >= 0)
+			glUniform1f(custom.beat_age, shader_beat_age);
 
 		glBindVertexArray(geometry.vao);
 		glDrawElements(GL_TRIANGLES, geometry.draw_count, GL_UNSIGNED_INT, (const GLvoid*)0);
