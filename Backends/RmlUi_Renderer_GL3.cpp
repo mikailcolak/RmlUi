@@ -20,9 +20,13 @@
 #if defined RMLUI_PLATFORM_EMSCRIPTEN
 	#define RMLUI_SHADER_HEADER_VERSION "#version 300 es\nprecision highp float;\n"
 	#include <GLES3/gl3.h>
+// ES 3.0, not 3.2: the engine declares 3.0 as its baseline in the Android
+// manifest so the app stays visible to 3.0 and 3.1 devices, and shaders
+// compiled against 3.2 would fail on exactly those devices at run time.
+// Nothing in this backend needs anything above 3.0.
 #elif defined __ANDROID__
-	#define RMLUI_SHADER_HEADER_VERSION "#version 320 es\nprecision highp float;\n"
-	#include <GLES3/gl32.h>
+	#define RMLUI_SHADER_HEADER_VERSION "#version 300 es\nprecision highp float;\n"
+	#include <GLES3/gl3.h>
 #elif defined RMLUI_GL3_CUSTOM_LOADER
 	#define RMLUI_SHADER_HEADER_VERSION "#version 330\n"
 	#include RMLUI_GL3_CUSTOM_LOADER
