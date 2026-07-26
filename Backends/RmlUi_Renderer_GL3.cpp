@@ -785,6 +785,8 @@ struct CustomShader {
 	GLint audio_hit = -1;
 	GLint beat = -1;
 	GLint beat_age = -1;
+	GLint beats = -1;
+	GLint beat_count = -1;
 };
 
 struct CustomShaderRegistry {
@@ -1709,15 +1711,30 @@ bool RenderInterface_GL3::RegisterShader(const Rml::String& name, const Rml::Str
 	entry.audio_hit = glGetUniformLocation(program, "_audio_hit");
 	entry.beat = glGetUniformLocation(program, "_audio_beat");
 	entry.beat_age = glGetUniformLocation(program, "_audio_beat_age");
+	// Array uniforms are addressed by their first element; drivers differ on
+	// whether the bare name resolves, so fall back to the explicit subscript.
+	entry.beats = glGetUniformLocation(program, "_audio_beats");
+	if (entry.beats < 0)
+		entry.beats = glGetUniformLocation(program, "_audio_beats[0]");
+	entry.beat_count = glGetUniformLocation(program, "_audio_beat_count");
 	return true;
 }
 
-void RenderInterface_GL3::SetShaderAudio(float music_level, float effect_hit, float beat_strength, float beat_age)
+void RenderInterface_GL3::SetShaderAudio(float music_level, float effect_hit, float beat_strength, float beat_age,
+	const float* beats, int beat_count)
 {
 	shader_audio_level = music_level;
 	shader_audio_hit = effect_hit;
 	shader_beat_strength = beat_strength;
 	shader_beat_age = beat_age;
+
+	if (beat_count < 0)
+		beat_count = 0;
+	if (beat_count > MaxShaderBeats)
+		beat_count = MaxShaderBeats;
+	shader_beat_count = beats ? beat_count : 0;
+	for (int i = 0; i < shader_beat_count * 2; ++i)
+		shader_beats[i] = beats[i];
 }
 
 Rml::CompiledShaderHandle RenderInterface_GL3::CompileShader(const Rml::String& name, const Rml::Dictionary& parameters)
@@ -1879,6 +1896,10 @@ void RenderInterface_GL3::RenderShader(Rml::CompiledShaderHandle shader_handle, 
 			glUniform1f(custom.beat, shader_beat_strength);
 		if (custom.beat_age >= 0)
 			glUniform1f(custom.beat_age, shader_beat_age);
+		if (custom.beat_count >= 0)
+			glUniform1i(custom.beat_count, shader_beat_count);
+		if (custom.beats >= 0)
+			glUniform2fv(custom.beats, MaxShaderBeats, shader_beats);
 
 		glBindVertexArray(geometry.vao);
 		glDrawElements(GL_TRIANGLES, geometry.draw_count, GL_UNSIGNED_INT, (const GLvoid*)0);

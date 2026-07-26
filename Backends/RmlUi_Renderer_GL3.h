@@ -76,7 +76,11 @@ public:
 	//   _audio_beat       strength of the last music onset, 0..1
 	//   _audio_beat_age   seconds since that onset
 	// Shaders that do not declare a uniform simply ignore it.
-	void SetShaderAudio(float music_level, float effect_hit, float beat_strength, float beat_age);
+	//   _audio_beats[]    (strength, age) per live onset, newest last
+	//   _audio_beat_count how many entries of that array are valid
+	// `beats` points at 2*beat_count floats, interleaved strength then age.
+	void SetShaderAudio(float music_level, float effect_hit, float beat_strength, float beat_age,
+		const float* beats, int beat_count);
 
 	Rml::CompiledShaderHandle CompileShader(const Rml::String& name, const Rml::Dictionary& parameters) override;
 	void RenderShader(Rml::CompiledShaderHandle shader_handle, Rml::CompiledGeometryHandle geometry_handle, Rml::Vector2f translation,
@@ -130,6 +134,9 @@ private:
 	float shader_audio_hit = 0.0f;
 	float shader_beat_strength = 0.0f;
 	float shader_beat_age = 0.0f;
+	static constexpr int MaxShaderBeats = 16;
+	float shader_beats[MaxShaderBeats * 2] = {};
+	int shader_beat_count = 0;
 
 	/*
 	    Manages render targets, including the layer stack and postprocessing framebuffers.
