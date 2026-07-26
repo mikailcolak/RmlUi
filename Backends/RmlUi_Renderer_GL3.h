@@ -10,6 +10,7 @@ class RenderLayerStack;
 namespace Gfx {
 struct ProgramData;
 struct FramebufferData;
+struct CustomShaderRegistry;
 } // namespace Gfx
 
 class RenderInterface_GL3 : public Rml::RenderInterface {
@@ -61,6 +62,14 @@ public:
 	Rml::CompiledFilterHandle CompileFilter(const Rml::String& name, const Rml::Dictionary& parameters) override;
 	void ReleaseFilter(Rml::CompiledFilterHandle filter) override;
 
+	// Registers a fragment shader that RCSS can then reference as
+	// `decorator: shader(<name>)`. Only the fragment stage is given; the
+	// standard vertex stage supplies fragTexCoord and fragColor, and the
+	// version header is prepended, so authored shaders need no boilerplate.
+	// Registering an existing name replaces its program, which is what makes
+	// hot reload work. Returns false if compilation or linking fails.
+	bool RegisterShader(const Rml::String& name, const Rml::String& fragment_source);
+
 	Rml::CompiledShaderHandle CompileShader(const Rml::String& name, const Rml::Dictionary& parameters) override;
 	void RenderShader(Rml::CompiledShaderHandle shader_handle, Rml::CompiledGeometryHandle geometry_handle, Rml::Vector2f translation,
 		Rml::TextureHandle texture) override;
@@ -108,6 +117,7 @@ private:
 	Rml::CompiledGeometryHandle fullscreen_quad_geometry = {};
 
 	Rml::UniquePtr<const Gfx::ProgramData> program_data;
+	Rml::UniquePtr<Gfx::CustomShaderRegistry> custom_shaders;
 
 	/*
 	    Manages render targets, including the layer stack and postprocessing framebuffers.

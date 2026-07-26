@@ -772,6 +772,27 @@ static void DestroyShaders(const ProgramData& data)
 		glDeleteShader(id);
 }
 
+// A fragment shader registered at runtime, reachable from RCSS as
+// `decorator: shader(<name>)`. Custom programs reuse the main vertex stage, so
+// they receive fragTexCoord and fragColor exactly like the built-in decorators.
+struct CustomShader {
+	GLuint program = 0;
+	GLint translate = -1;
+	GLint transform = -1;
+	GLint value = -1;
+	GLint dimensions = -1;
+};
+
+struct CustomShaderRegistry {
+	Rml::UnorderedMap<Rml::String, CustomShader> shaders;
+
+	~CustomShaderRegistry()
+	{
+		for (auto& entry : shaders)
+			glDeleteProgram(entry.second.program);
+	}
+};
+
 } // namespace Gfx
 
 RenderInterface_GL3::RenderInterface_GL3()
@@ -1607,7 +1628,7 @@ void RenderInterface_GL3::ReleaseFilter(Rml::CompiledFilterHandle filter)
 	delete reinterpret_cast<CompiledFilter*>(filter);
 }
 
-enum class CompiledShaderType { Invalid = 0, Gradient, Creation };
+enum class CompiledShaderType { Invalid = 0, Gradient, Creation, Custom };
 struct CompiledShader {
 	CompiledShaderType type;
 
@@ -1620,7 +1641,68 @@ struct CompiledShader {
 
 	// Shader
 	Rml::Vector2f dimensions;
+
+	// Custom: resolved by name at draw time, see CompiledShaderType::Custom.
+	Rml::String custom_name;
 };
+
+bool RenderInterface_GL3::RegisterShader(const Rml::String& name, const Rml::String& fragment_source)
+{
+	if (!program_data)
+		return false;
+
+	if (name.empty())
+	{
+		Rml::Log::Message(Rml::Log::LT_WARNING, "Cannot register a shader with an empty name.");
+		return false;
+	}
+
+	// #line 1 makes the compiler report errors against the authored source
+	// rather than counting the prepended header.
+	const Rml::String source = Rml::String(RMLUI_SHADER_HEADER_VERSION) + "#line 1\n" + fragment_source;
+
+	GLuint fragment_shader = 0;
+	if (!Gfx::CreateShader(fragment_shader, GL_FRAGMENT_SHADER, source.c_str()))
+	{
+		Rml::Log::Message(Rml::Log::LT_ERROR, "Could not compile custom shader '%s'.", name.c_str());
+		return false;
+	}
+
+	const GLuint vertex_shader = program_data->vert_shaders[VertShaderId::Main];
+
+	GLuint program = glCreateProgram();
+	glAttachShader(program, vertex_shader);
+	glAttachShader(program, fragment_shader);
+	glLinkProgram(program);
+	glDetachShader(program, vertex_shader);
+	glDetachShader(program, fragment_shader);
+	glDeleteShader(fragment_shader);
+
+	GLint success = 0;
+	glGetProgramiv(program, GL_LINK_STATUS, &success);
+	if (!success)
+	{
+		char info_log[512] = {};
+		glGetProgramInfoLog(program, sizeof(info_log), nullptr, info_log);
+		Rml::Log::Message(Rml::Log::LT_ERROR, "Could not link custom shader '%s': %s", name.c_str(), info_log);
+		glDeleteProgram(program);
+		return false;
+	}
+
+	if (!custom_shaders)
+		custom_shaders = Rml::MakeUnique<Gfx::CustomShaderRegistry>();
+
+	Gfx::CustomShader& entry = custom_shaders->shaders[name];
+	if (entry.program)
+		glDeleteProgram(entry.program); // replacing an earlier registration
+
+	entry.program = program;
+	entry.translate = glGetUniformLocation(program, "_translate");
+	entry.transform = glGetUniformLocation(program, "_transform");
+	entry.value = glGetUniformLocation(program, "_value");
+	entry.dimensions = glGetUniformLocation(program, "_dimensions");
+	return true;
+}
 
 Rml::CompiledShaderHandle RenderInterface_GL3::CompileShader(const Rml::String& name, const Rml::Dictionary& parameters)
 {
@@ -1679,6 +1761,21 @@ Rml::CompiledShaderHandle RenderInterface_GL3::CompileShader(const Rml::String& 
 			shader.type = CompiledShaderType::Creation;
 			shader.dimensions = Rml::Get(parameters, "dimensions", Rml::Vector2f(0.f));
 		}
+		else if (custom_shaders)
+		{
+			// RCSS string values arrive verbatim, so shader("glow.frag") keeps
+			// its quotes while shader(glow.frag) does not. Accept both.
+			Rml::String key = value;
+			if (key.size() >= 2 && (key.front() == '"' || key.front() == '\'') && key.back() == key.front())
+				key = key.substr(1, key.size() - 2);
+
+			if (custom_shaders->shaders.count(key) > 0)
+			{
+				shader.type = CompiledShaderType::Custom;
+				shader.custom_name = key;
+				shader.dimensions = Rml::Get(parameters, "dimensions", Rml::Vector2f(0.f));
+			}
+		}
 	}
 
 	if (shader.type != CompiledShaderType::Invalid)
@@ -1726,6 +1823,39 @@ void RenderInterface_GL3::RenderShader(Rml::CompiledShaderHandle shader_handle, 
 		glUniform2f(GetUniformLocation(UniformId::Dimensions), shader.dimensions.x, shader.dimensions.y);
 
 		SubmitTransformUniform(translation);
+		glBindVertexArray(geometry.vao);
+		glDrawElements(GL_TRIANGLES, geometry.draw_count, GL_UNSIGNED_INT, (const GLvoid*)0);
+		glBindVertexArray(0);
+	}
+	break;
+	case CompiledShaderType::Custom:
+	{
+		if (!custom_shaders)
+			break;
+
+		const auto it = custom_shaders->shaders.find(shader.custom_name);
+		if (it == custom_shaders->shaders.end())
+			break;
+
+		const Gfx::CustomShader& custom = it->second;
+		const double time = Rml::GetSystemInterface()->GetElapsedTime();
+
+		glUseProgram(custom.program);
+		// UseProgram() caches which built-in program is bound and skips the
+		// bind when it believes the right one is already active. A custom
+		// program is outside that scheme, so the cache is invalidated here;
+		// without this the next built-in draw would render with this program.
+		active_program = ProgramId::None;
+
+		if (custom.transform >= 0)
+			glUniformMatrix4fv(custom.transform, 1, false, transform.data());
+		if (custom.translate >= 0)
+			glUniform2fv(custom.translate, 1, &translation.x);
+		if (custom.value >= 0)
+			glUniform1f(custom.value, (float)time);
+		if (custom.dimensions >= 0)
+			glUniform2f(custom.dimensions, shader.dimensions.x, shader.dimensions.y);
+
 		glBindVertexArray(geometry.vao);
 		glDrawElements(GL_TRIANGLES, geometry.draw_count, GL_UNSIGNED_INT, (const GLvoid*)0);
 		glBindVertexArray(0);
