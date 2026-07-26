@@ -1681,6 +1681,15 @@ bool RenderInterface_GL3::RegisterShader(const Rml::String& name, const Rml::Str
 	const GLuint vertex_shader = program_data->vert_shaders[VertShaderId::Main];
 
 	GLuint program = glCreateProgram();
+
+	// Bind the attribute locations the way CreateProgram does, before linking.
+	// Without this the driver assigns them itself, and the geometry's VAO --
+	// which is laid out for these fixed indices -- feeds the wrong buffer to
+	// each input. Desktop NVIDIA happens to assign them in declaration order so
+	// it looked correct there; Adreno does not, and the decorator drew nothing.
+	for (GLuint i = 0; i < (GLuint)Gfx::VertexAttribute::Count; i++)
+		glBindAttribLocation(program, i, Gfx::vertex_attribute_names[i]);
+
 	glAttachShader(program, vertex_shader);
 	glAttachShader(program, fragment_shader);
 	glLinkProgram(program);
