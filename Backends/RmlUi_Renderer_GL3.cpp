@@ -177,7 +177,7 @@ void main() {
 		uv += p / l * (sin(z) + 1.) * abs(sin(l * 9. - z - z));
 		c[i] = .01 / length(mod(uv, 1.) - .5);
 	}
-	finalColor = vec4(c / l, fragColor.a);
+	finalColor = vec4(c / l, 0.35 * fragColor.a);
 }
 )";
 
