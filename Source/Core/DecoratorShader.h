@@ -13,7 +13,7 @@ public:
 	DecoratorShader();
 	virtual ~DecoratorShader();
 
-	bool Initialise(String&& value);
+	bool Initialise(String&& value, int render_scale);
 
 	DecoratorDataHandle GenerateElementData(Element* element, BoxArea paint_area) const override;
 	void ReleaseElementData(DecoratorDataHandle element_data) const override;
@@ -22,6 +22,8 @@ public:
 
 private:
 	String value;
+	// Divisor for the resolution the shader is evaluated at; 1 renders at full size.
+	int render_scale = 1;
 };
 
 class DecoratorShaderInstancer : public DecoratorInstancer {
@@ -35,6 +37,7 @@ public:
 private:
 	struct PropertyIds {
 		PropertyId value;
+		PropertyId render_scale;
 	};
 	PropertyIds ids;
 };

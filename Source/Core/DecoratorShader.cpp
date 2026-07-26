@@ -18,9 +18,10 @@ DecoratorShader::DecoratorShader() {}
 
 DecoratorShader::~DecoratorShader() {}
 
-bool DecoratorShader::Initialise(String&& in_value)
+bool DecoratorShader::Initialise(String&& in_value, int in_render_scale)
 {
 	value = std::move(in_value);
+	render_scale = in_render_scale;
 	return true;
 }
 
@@ -32,7 +33,8 @@ DecoratorDataHandle DecoratorShader::GenerateElementData(Element* element, BoxAr
 
 	const RenderBox render_box = element->GetRenderBox(paint_area);
 	const Vector2f dimensions = render_box.GetFillSize();
-	CompiledShader shader = render_manager->CompileShader("shader", Dictionary{{"value", Variant(value)}, {"dimensions", Variant(dimensions)}});
+	CompiledShader shader = render_manager->CompileShader("shader",
+		Dictionary{{"value", Variant(value)}, {"dimensions", Variant(dimensions)}, {"render_scale", Variant(render_scale)}});
 	if (!shader)
 		return INVALID_DECORATORDATAHANDLE;
 
@@ -67,7 +69,10 @@ void DecoratorShader::RenderElement(Element* element, DecoratorDataHandle handle
 DecoratorShaderInstancer::DecoratorShaderInstancer()
 {
 	ids.value = RegisterProperty("value", String()).AddParser("string").GetId();
-	RegisterShorthand("decorator", "value", ShorthandType::FallThrough);
+	// Evaluate the shader at a fraction of the resolution and upscale the result.
+	// The keyword's value is the divisor applied to each axis.
+	ids.render_scale = RegisterProperty("render-scale", "full").AddParser("keyword", "full=1, half=2, quarter=4, eighth=8").GetId();
+	RegisterShorthand("decorator", "value, render-scale", ShorthandType::FallThrough);
 }
 
 DecoratorShaderInstancer::~DecoratorShaderInstancer() {}
@@ -81,8 +86,11 @@ SharedPtr<Decorator> DecoratorShaderInstancer::InstanceDecorator(const String& /
 
 	String value = p_value->Get<String>();
 
+	const Property* p_render_scale = properties_.GetProperty(ids.render_scale);
+	const int render_scale = (p_render_scale ? p_render_scale->Get<int>() : 1);
+
 	auto decorator = MakeShared<DecoratorShader>();
-	if (decorator->Initialise(std::move(value)))
+	if (decorator->Initialise(std::move(value), render_scale))
 		return decorator;
 
 	return nullptr;

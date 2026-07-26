@@ -11,6 +11,7 @@ namespace Gfx {
 struct ProgramData;
 struct FramebufferData;
 struct CustomShaderRegistry;
+struct ScaledShaderTargets;
 } // namespace Gfx
 
 class RenderInterface_GL3 : public Rml::RenderInterface {
@@ -112,6 +113,10 @@ private:
 
 	void RenderBlur(float sigma, const Gfx::FramebufferData& source_destination, const Gfx::FramebufferData& temp, Rml::Rectanglei window_flipped);
 
+	// Returns the cached reduced-resolution target for the given scale, creating
+	// it on first use, or nullptr if it could not be created.
+	const Gfx::FramebufferData* EnsureScaledShaderTarget(int scale);
+
 	static constexpr size_t MaxNumPrograms = 32;
 	std::bitset<MaxNumPrograms> program_transform_dirty;
 
@@ -130,6 +135,7 @@ private:
 
 	Rml::UniquePtr<const Gfx::ProgramData> program_data;
 	Rml::UniquePtr<Gfx::CustomShaderRegistry> custom_shaders;
+	Rml::UniquePtr<Gfx::ScaledShaderTargets> shader_scale_targets;
 	float shader_audio_level = 0.0f;
 	float shader_audio_hit = 0.0f;
 	float shader_beat_strength = 0.0f;

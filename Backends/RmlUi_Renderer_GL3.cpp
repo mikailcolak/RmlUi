@@ -185,6 +185,26 @@ void main() {
 }
 )";
 
+// Composites a reduced-resolution shader target back over the element, used by
+// `render-scale`. The target covers the whole viewport, so the sample position
+// comes from the window coordinate rather than the element's texture
+// coordinates; that needs no conversion between the two spaces. `_target_size`
+// is the viewport size the reduced target stands in for, which is its own size
+// multiplied by the scale -- not the viewport size itself, since integer
+// division may have truncated it.
+static const char* shader_frag_upscale = RMLUI_SHADER_HEADER R"(
+uniform sampler2D _tex;
+uniform vec2 _target_size;
+
+in vec2 fragTexCoord;
+in vec4 fragColor;
+out vec4 finalColor;
+
+void main() {
+	finalColor = texture(_tex, gl_FragCoord.xy / _target_size);
+}
+)";
+
 static const char* shader_vert_passthrough = RMLUI_SHADER_HEADER R"(
 in vec2 inPosition;
 in vec2 inTexCoord0;
@@ -295,6 +315,7 @@ enum class ProgramId {
 	Texture,
 	Gradient,
 	Creation,
+	Upscale,
 	Passthrough,
 	ColorMatrix,
 	BlendMask,
@@ -313,6 +334,7 @@ enum class FragShaderId {
 	Texture,
 	Gradient,
 	Creation,
+	Upscale,
 	Passthrough,
 	ColorMatrix,
 	BlendMask,
@@ -339,6 +361,7 @@ enum class UniformId {
 	NumStops,
 	Value,
 	Dimensions,
+	TargetSize,
 	Count,
 };
 
@@ -346,7 +369,7 @@ namespace Gfx {
 
 static const char* const program_uniform_names[(size_t)UniformId::Count] = {"_translate", "_transform", "_tex", "_color", "_color_matrix",
 	"_texelOffset", "_texCoordMin", "_texCoordMax", "_texMask", "_weights[0]", "_func", "_p", "_v", "_stop_colors[0]", "_stop_positions[0]",
-	"_num_stops", "_value", "_dimensions"};
+	"_num_stops", "_value", "_dimensions", "_target_size"};
 
 enum class VertexAttribute { Position, Color0, TexCoord0, Count };
 static const char* const vertex_attribute_names[(size_t)VertexAttribute::Count] = {"inPosition", "inColor0", "inTexCoord0"};
@@ -379,6 +402,7 @@ static const FragShaderDefinition frag_shader_definitions[] = {
 	{FragShaderId::Texture,     "texture",      shader_frag_texture},
 	{FragShaderId::Gradient,    "gradient",     shader_frag_gradient},
 	{FragShaderId::Creation,    "creation",     shader_frag_creation},
+	{FragShaderId::Upscale,     "upscale",      shader_frag_upscale},
 	{FragShaderId::Passthrough, "passthrough",  shader_frag_passthrough},
 	{FragShaderId::ColorMatrix, "color_matrix", shader_frag_color_matrix},
 	{FragShaderId::BlendMask,   "blend_mask",   shader_frag_blend_mask},
@@ -390,6 +414,7 @@ static const ProgramDefinition program_definitions[] = {
 	{ProgramId::Texture,     "texture",      VertShaderId::Main,        FragShaderId::Texture},
 	{ProgramId::Gradient,    "gradient",     VertShaderId::Main,        FragShaderId::Gradient},
 	{ProgramId::Creation,    "creation",     VertShaderId::Main,        FragShaderId::Creation},
+	{ProgramId::Upscale,     "upscale",      VertShaderId::Main,        FragShaderId::Upscale},
 	{ProgramId::Passthrough, "passthrough",  VertShaderId::Passthrough, FragShaderId::Passthrough},
 	{ProgramId::ColorMatrix, "color_matrix", VertShaderId::Passthrough, FragShaderId::ColorMatrix},
 	{ProgramId::BlendMask,   "blend_mask",   VertShaderId::Passthrough, FragShaderId::BlendMask},
@@ -801,6 +826,24 @@ struct CustomShaderRegistry {
 		for (auto& entry : shaders)
 			glDeleteProgram(entry.second.program);
 	}
+};
+
+// Reduced-resolution targets for `render-scale`, one per distinct scale, since
+// several decorators may ask for different scales within the same frame. Each is
+// sized from the viewport, so all of them are dropped when that changes.
+struct ScaledShaderTargets {
+	int viewport_width = 0;
+	int viewport_height = 0;
+	Rml::UnorderedMap<int, FramebufferData> by_scale;
+
+	void Clear()
+	{
+		for (auto& entry : by_scale)
+			DestroyFramebuffer(entry.second);
+		by_scale.clear();
+	}
+
+	~ScaledShaderTargets() { Clear(); }
 };
 
 } // namespace Gfx
@@ -1654,6 +1697,8 @@ struct CompiledShader {
 
 	// Custom: resolved by name at draw time, see CompiledShaderType::Custom.
 	Rml::String custom_name;
+	// Custom: divisor for the resolution the shader is evaluated at, 1 for full size.
+	int render_scale = 1;
 };
 
 bool RenderInterface_GL3::RegisterShader(const Rml::String& name, const Rml::String& fragment_source)
@@ -1820,6 +1865,7 @@ Rml::CompiledShaderHandle RenderInterface_GL3::CompileShader(const Rml::String& 
 				shader.type = CompiledShaderType::Custom;
 				shader.custom_name = key;
 				shader.dimensions = Rml::Get(parameters, "dimensions", Rml::Vector2f(0.f));
+				shader.render_scale = Rml::Math::Max(1, Rml::Get(parameters, "render_scale", 1));
 			}
 		}
 	}
@@ -1829,6 +1875,39 @@ Rml::CompiledShaderHandle RenderInterface_GL3::CompileShader(const Rml::String& 
 
 	Rml::Log::Message(Rml::Log::LT_WARNING, "Unsupported shader type '%s'.", name.c_str());
 	return {};
+}
+
+const Gfx::FramebufferData* RenderInterface_GL3::EnsureScaledShaderTarget(int scale)
+{
+	if (!shader_scale_targets)
+		shader_scale_targets = Rml::MakeUnique<Gfx::ScaledShaderTargets>();
+
+	if (shader_scale_targets->viewport_width != viewport_width || shader_scale_targets->viewport_height != viewport_height)
+	{
+		shader_scale_targets->Clear();
+		shader_scale_targets->viewport_width = viewport_width;
+		shader_scale_targets->viewport_height = viewport_height;
+	}
+
+	const auto it = shader_scale_targets->by_scale.find(scale);
+	if (it != shader_scale_targets->by_scale.end())
+		return &it->second;
+
+	const int width = Rml::Math::Max(1, viewport_width / scale);
+	const int height = Rml::Math::Max(1, viewport_height / scale);
+
+	// No multisampling, so the attachment is a texture the upscale pass can sample.
+	// No depth/stencil either: clipping stays in full-resolution window space and is
+	// applied by that pass instead.
+	Gfx::FramebufferData fb = {};
+	if (!Gfx::CreateFramebuffer(fb, width, height, 0, Gfx::FramebufferAttachment::None, 0))
+	{
+		Gfx::DestroyFramebuffer(fb);
+		Rml::Log::Message(Rml::Log::LT_ERROR, "Could not create a %dx%d shader target for render-scale.", width, height);
+		return nullptr;
+	}
+
+	return &shader_scale_targets->by_scale.emplace(scale, fb).first->second;
 }
 
 void RenderInterface_GL3::RenderShader(Rml::CompiledShaderHandle shader_handle, Rml::CompiledGeometryHandle geometry_handle,
@@ -1886,6 +1965,31 @@ void RenderInterface_GL3::RenderShader(Rml::CompiledShaderHandle shader_handle, 
 		const Gfx::CustomShader& custom = it->second;
 		const double time = Rml::GetSystemInterface()->GetElapsedTime();
 
+		// With render-scale the shader is evaluated into a smaller target first.
+		// Because the target is a scaled copy of the whole viewport and the draw
+		// keeps the same transform, the element lands in the proportional
+		// sub-rect without touching the projection.
+		const Gfx::FramebufferData* scaled = (shader.render_scale > 1 ? EnsureScaledShaderTarget(shader.render_scale) : nullptr);
+
+		GLint restore_framebuffer = 0;
+		bool restore_scissor = false;
+		if (scaled)
+		{
+			// RmlUi renders into its own layer, so read the bound framebuffer
+			// back rather than assuming the default one.
+			glGetIntegerv(GL_FRAMEBUFFER_BINDING, &restore_framebuffer);
+			glBindFramebuffer(GL_FRAMEBUFFER, scaled->framebuffer);
+			glViewport(0, 0, scaled->width, scaled->height);
+
+			// The scissor box is in full-resolution window space, so it would
+			// clip the wrong region here. The upscale pass is scissored instead.
+			restore_scissor = (glIsEnabled(GL_SCISSOR_TEST) == GL_TRUE);
+			if (restore_scissor)
+				glDisable(GL_SCISSOR_TEST);
+
+			glClear(GL_COLOR_BUFFER_BIT);
+		}
+
 		glUseProgram(custom.program);
 		// UseProgram() caches which built-in program is bound and skips the
 		// bind when it believes the right one is already active. A custom
@@ -1917,6 +2021,31 @@ void RenderInterface_GL3::RenderShader(Rml::CompiledShaderHandle shader_handle, 
 		glBindVertexArray(geometry.vao);
 		glDrawElements(GL_TRIANGLES, geometry.draw_count, GL_UNSIGNED_INT, (const GLvoid*)0);
 		glBindVertexArray(0);
+
+		if (scaled)
+		{
+			glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)restore_framebuffer);
+			glViewport(0, 0, viewport_width, viewport_height);
+			if (restore_scissor)
+				glEnable(GL_SCISSOR_TEST);
+
+			// Composite the reduced target back over the element with the same
+			// geometry, so scissor and clip mask apply exactly as they would to
+			// an unscaled draw.
+			UseProgram(ProgramId::Upscale);
+			glUniform2f(GetUniformLocation(UniformId::TargetSize), float(scaled->width * shader.render_scale),
+				float(scaled->height * shader.render_scale));
+
+			glActiveTexture(GL_TEXTURE0);
+			Gfx::BindTexture(*scaled);
+
+			SubmitTransformUniform(translation);
+			glBindVertexArray(geometry.vao);
+			glDrawElements(GL_TRIANGLES, geometry.draw_count, GL_UNSIGNED_INT, (const GLvoid*)0);
+			glBindVertexArray(0);
+
+			glBindTexture(GL_TEXTURE_2D, 0);
+		}
 	}
 	break;
 	case CompiledShaderType::Invalid:
